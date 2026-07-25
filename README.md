@@ -246,14 +246,15 @@ POST /api/audit
 
 ## Running Tests
 
-JUnit 5 tests cover the parsing logic in isolation (no network calls).
-
 ```bash
 cd backend
 mvn test
 ```
 
-Tests include: happy-path extraction of every metric, empty-string fallback when title/meta description are missing, graceful handling of malformed/unclosed HTML, heading-level counting, absolute image URL resolution with limits, SEO tag extraction (present and absent), and word-count exclusion of `script`/`style`/`noscript` content.
+Two test classes cover two different layers:
+
+- **`HtmlParserTest`** — unit tests for the parsing logic in isolation (no network calls). Covers: happy-path extraction of every metric, empty-string fallback when title/meta description are missing, graceful handling of malformed/unclosed HTML, heading-level counting, absolute image URL resolution with limits, SEO tag extraction (present and absent), and word-count exclusion of `script`/`style`/`noscript` content.
+- **`AuditIntegrationTest`** — full request/response cycle tests. Boots the real Spring context on a random port and sends real HTTP requests through `AuditController` → `AuditService` → the real Java `HttpClient` → `HtmlParser`, against a local `com.sun.net.httpserver.HttpServer` standing in for the audited page (no real internet access needed, fully deterministic). Covers: happy path (200, full metrics), invalid URL (400), connection refused (502), non-HTML content type (415), and request timeout (504). The timeout case waits out the real 6-second `AuditService` timeout, so this test class takes ~10s to run — that's expected.
 
 ## Design Decisions
 
