@@ -89,7 +89,7 @@ If this variable is not set, it defaults to `http://localhost:8080` for local de
 
 ## Production Build & Single-Jar Deployment
 
-For deployment, `frontend/` and `backend/` are packaged into **one executable Spring Boot jar** that serves the React app and the REST API from the same port. There is no separate frontend host and no Docker involved.
+For deployment, `frontend/` and `backend/` are packaged into **one executable Spring Boot jar** that serves the React app and the REST API from the same port. There is no separate frontend host — both are built and shipped as a single container image (see [Deploying to Railway](#deploying-to-railway) below).
 
 ### How it works
 
@@ -138,17 +138,15 @@ Spring's `WebConfig` (`backend/src/main/java/com/digitalheroes/pagepulse/config/
 
 ## Deploying to Railway
 
-This app deploys as a **single Railway service** — no Docker, no second service for the frontend.
+This app deploys as a **single Railway service** built from the root-level `Dockerfile` — no second service for the frontend.
 
-1. Push the repository (with both `backend/` and `frontend/` folders) to GitHub.
+1. Push the repository (with both `backend/` and `frontend/` folders, and the root `Dockerfile`) to GitHub.
 2. Create a new Railway project from that repo.
-3. In the service settings, set:
-   - **Root Directory:** *(leave empty — repo root)*
-   - **Build Command:** `mvn -f backend/pom.xml clean package -DskipTests`
-   - **Start Command:** `java -jar backend/target/page-pulse.jar`
-4. A `railpack.json` at the repo root pins the build to Railway's Java provider (`{"provider": "java"}`). This is required: Root Directory has to stay at the repo root so `frontend/` is included in the build context (`frontend-maven-plugin` reaches it via `../frontend` from `backend/pom.xml`), but Railpack's Java auto-detection only looks for a `pom.xml` at that root directory. Since `pom.xml` actually lives in `backend/`, Railpack would otherwise fall back to a plain shell environment with no JDK/Maven installed (`mvn: not found`). Forcing the provider explicitly sidesteps that detection gap while still giving the project the frontend directory it needs at build time.
-5. Railway automatically injects a `PORT` environment variable, which `application.properties` already reads via `server.port=${PORT:8080}` — no configuration needed.
-6. Deploy. Railway builds the jar (which builds the frontend as part of `mvn clean package`, per [Production Build](#production-build--single-jar-deployment) above) and starts it — you get one public URL serving both the UI and the API.
+3. In the service settings, set **Root Directory** to empty (repo root), so Railway finds the `Dockerfile` and uses it directly. Leave Build Command and Start Command unset — the `Dockerfile` already defines both (`RUN mvn ...` for the build stage, `CMD ["java", "-jar", ...]` for the start command).
+4. Railway automatically injects a `PORT` environment variable, which `application.properties` already reads via `server.port=${PORT:8080}` — no configuration needed.
+5. Deploy. Railway builds the image (`mvn -f backend/pom.xml clean package` in the `maven:3.9-eclipse-temurin-21` build stage builds the frontend too, per [Production Build](#production-build--single-jar-deployment) above, then the resulting jar is copied into a slim `eclipse-temurin:21-jre` runtime stage) and starts the container — you get one public URL serving both the UI and the API.
+
+A Dockerfile was chosen over Railway's zero-config Railpack builder specifically because this project is a monorepo where the Maven project (`backend/pom.xml`) needs a sibling directory (`frontend/`) at build time. Railpack's Java auto-detection and its default deploy-image assembly both assume a single-language project rooted at the build root, which doesn't hold here; a Dockerfile sidesteps that by giving explicit, full control over what's copied into the build and runtime stages.
 
 The `FRONTEND_ORIGIN`/`app.cors.allowed-origin` setting isn't needed for this deployment, since the frontend is served same-origin by the same service; it's only relevant for local dev, where it defaults to `http://localhost:5173`.
 
@@ -268,7 +266,7 @@ Tests include: happy-path extraction of every metric, empty-string fallback when
 
 4. **A single shared `HttpClient` bean.** Both the main page fetch and the new image-checking feature reuse one `HttpClient` instance (configured in `HttpClientConfig`) rather than constructing a new client per request. This avoids the overhead of repeated client setup and keeps connection-pooling behavior consistent across the service.
 
-5. **`frontend-maven-plugin` over a separate frontend deployment.** Rather than deploying the React app to its own static host, the frontend build is triggered from `backend/pom.xml` and its output copied onto the backend's classpath at package time (see [Production Build](#production-build--single-jar-deployment)). This keeps deployment to a single Railway service with one URL and no Docker, while `frontend/` and `backend/` remain separate folders in source control — only the compiled `dist/` output crosses into `target/` at build time, never into git-tracked source.
+5. **`frontend-maven-plugin` over a separate frontend deployment.** Rather than deploying the React app to its own static host, the frontend build is triggered from `backend/pom.xml` and its output copied onto the backend's classpath at package time (see [Production Build](#production-build--single-jar-deployment)). This keeps deployment to a single Railway service with one URL, while `frontend/` and `backend/` remain separate folders in source control — only the compiled `dist/` output crosses into `target/` at build time, never into git-tracked source.
 
 ## Future Improvements
 
