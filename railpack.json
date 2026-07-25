@@ -1,4 +1,10 @@
 {
   "$schema": "https://schema.railpack.com",
-  "provider": "java"
+  "provider": "java",
+  "deploy": {
+    "startCommand": "java -jar backend/target/page-pulse.jar",
+    "inputs": [
+      { "step": "build", "include": ["backend/target"] }
+    ]
+  }
 }
