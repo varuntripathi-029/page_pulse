@@ -54,7 +54,9 @@ Each backend package has a single responsibility: controllers never contain busi
 
 ## Setup Instructions
 
-### Backend
+Page Pulse ships as a **single Spring Boot application**: in production, the backend jar serves the built React app as static content in addition to exposing the API. Locally, though, it's usually more convenient to run the two dev servers side by side (instant reload for the frontend, no rebuild needed for the backend). See [Production Build](#production-build--single-jar-deployment) below for how the two get combined.
+
+### Backend (local dev)
 
 Requires Java 21 and Maven.
 
@@ -65,7 +67,7 @@ mvn spring-boot:run
 
 The API starts on `http://localhost:8080` by default (configurable via the `PORT` environment variable).
 
-### Frontend
+### Frontend (local dev)
 
 Requires Node.js 18+.
 
@@ -75,15 +77,79 @@ npm install
 npm run dev
 ```
 
-The app starts on `http://localhost:5173` by default.
+The app starts on `http://localhost:5173` by default, and proxies API calls to the backend running separately on port 8080.
 
-**Configuration:** the frontend needs to know where the backend is running. Copy `.env.example` to `.env` and set:
+**Configuration:** in dev mode only, the frontend needs to know where the backend is running. Copy `.env.example` to `.env` and set:
 
 ```
 VITE_API_BASE_URL=http://localhost:8080
 ```
 
-If this variable is not set, it defaults to `http://localhost:8080` for local development.
+If this variable is not set, it defaults to `http://localhost:8080` for local development. This variable is **only read in dev mode** (`npm run dev`) — see [Production Build](#production-build--single-jar-deployment) for why the production build ignores it and always uses relative API paths instead.
+
+## Production Build & Single-Jar Deployment
+
+For deployment, `frontend/` and `backend/` are packaged into **one executable Spring Boot jar** that serves the React app and the REST API from the same port. There is no separate frontend host and no Docker involved.
+
+### How it works
+
+Running, from the `backend/` directory:
+
+```bash
+mvn clean package
+```
+
+automatically, with no manual steps:
+
+1. **Installs Node/npm.** The `frontend-maven-plugin` downloads a pinned Node version into `frontend/node/` (isolated from any system-wide Node install — nothing needs to be preinstalled on the build machine).
+2. **Builds the frontend.** It runs `npm ci` followed by `npm run build` inside `frontend/`, producing `frontend/dist/`.
+3. **Copies the build output onto the classpath.** `maven-resources-plugin` copies `frontend/dist/**` into `target/classes/static` — the classpath location (`classpath:/static/`) that Spring Boot serves static content from automatically. This intentionally copies into the Maven **build output** directory rather than into the git-tracked `backend/src/main/resources/static/` source folder, so nothing generated ever gets committed to version control; `backend/target/` is already gitignored.
+4. **Compiles and packages as usual.** `spring-boot-maven-plugin` repackages everything (backend classes + bundled static frontend + dependencies) into one fat jar: `target/page-pulse.jar`.
+
+The result is a single self-contained artifact:
+
+```bash
+java -jar target/page-pulse.jar
+```
+
+starts one process that serves the React app at `http://localhost:8080/` **and** the API at `http://localhost:8080/api/audit`.
+
+`frontend/` and `backend/` remain fully separate folders in source control — the frontend source is never merged into the backend. Only the compiled `frontend/dist` output crosses the boundary, and only at build time inside `target/`.
+
+Frontend engineers can still build/preview the frontend completely independently of the backend at any time:
+
+```bash
+cd frontend
+npm run build
+npm run preview
+```
+
+### Routing: API vs. SPA fallback
+
+Spring's `WebConfig` (`backend/src/main/java/com/digitalheroes/pagepulse/config/WebConfig.java`) registers a resource handler so that:
+
+- `/api/**` is always routed to `AuditController` as before; an unmapped path under `/api/` returns a proper `404`, never the SPA's `index.html`.
+- Any other path that matches a real file in the bundled static assets (JS/CSS/images) is served directly.
+- Any other path that doesn't match a real file (e.g. the browser is refreshed on a client-side route) falls back to `index.html`, so refreshing the page never produces a 404.
+
+### Why the frontend uses relative API paths in production
+
+`frontend/src/api/auditApi.js` calls `fetch('/api/audit', ...)` with no host in production builds, since the frontend and API are now served from the same origin. In dev mode (`npm run dev`), it still targets `VITE_API_BASE_URL` (default `http://localhost:8080`) since the Vite dev server and the backend run as two separate processes on two different ports. This switch is driven by Vite's built-in `import.meta.env.DEV` flag rather than an environment variable, specifically so a stray `VITE_API_BASE_URL` left in `frontend/.env` (which Vite loads in *every* mode, including production builds) can never leak an absolute `localhost` URL into a deployed build.
+
+## Deploying to Railway
+
+This app deploys as a **single Railway service** — no Docker, no second service for the frontend.
+
+1. Push the repository (with both `backend/` and `frontend/` folders) to GitHub.
+2. Create a new Railway project from that repo.
+3. In the service settings, set:
+   - **Root Directory:** `backend`
+   - **Build Command:** `mvn clean package -DskipTests` (Railway's Nixpacks builder auto-detects the Maven project; `-DskipTests` is optional and just keeps deploys fast)
+   - **Start Command:** `java -jar target/page-pulse.jar`
+4. Railway automatically injects a `PORT` environment variable, which `application.properties` already reads via `server.port=${PORT:8080}` — no configuration needed.
+5. Deploy. Railway builds the jar (which builds the frontend as part of `mvn clean package`, per [Production Build](#production-build--single-jar-deployment) above) and starts it — you get one public URL serving both the UI and the API.
+
+The `FRONTEND_ORIGIN`/`app.cors.allowed-origin` setting isn't needed for this deployment, since the frontend is served same-origin by the same service; it's only relevant for local dev, where it defaults to `http://localhost:5173`.
 
 ## API Contract
 
@@ -201,24 +267,7 @@ Tests include: happy-path extraction of every metric, empty-string fallback when
 
 4. **A single shared `HttpClient` bean.** Both the main page fetch and the new image-checking feature reuse one `HttpClient` instance (configured in `HttpClientConfig`) rather than constructing a new client per request. This avoids the overhead of repeated client setup and keeps connection-pooling behavior consistent across the service.
 
-## Deployment
-
-### Backend on Render
-
-1. Push the `backend/` folder to a Git repository.
-2. Create a new **Web Service** on Render, pointing at the repo with `backend/` as the root directory.
-3. Build command: `mvn clean package -DskipTests`
-4. Start command: `java -jar target/page-pulse.jar`
-5. Render automatically provides a `PORT` environment variable, which the app already reads (`server.port=${PORT:8080}`).
-6. Set the `FRONTEND_ORIGIN` environment variable to the deployed Vercel URL (e.g. `https://page-pulse.vercel.app`) so CORS allows requests from the frontend.
-
-### Frontend on Vercel
-
-1. Push the `frontend/` folder to a Git repository.
-2. Import the project into Vercel, with `frontend/` as the root directory.
-3. Framework preset: **Vite**.
-4. Set the environment variable `VITE_API_BASE_URL` to the deployed Render backend URL (e.g. `https://page-pulse-backend.onrender.com`).
-5. Deploy — Vercel runs `npm install` and `npm run build` automatically.
+5. **`frontend-maven-plugin` over a separate frontend deployment.** Rather than deploying the React app to its own static host, the frontend build is triggered from `backend/pom.xml` and its output copied onto the backend's classpath at package time (see [Production Build](#production-build--single-jar-deployment)). This keeps deployment to a single Railway service with one URL and no Docker, while `frontend/` and `backend/` remain separate folders in source control — only the compiled `dist/` output crosses into `target/` at build time, never into git-tracked source.
 
 ## Future Improvements
 
@@ -244,3 +293,4 @@ After the initial four-step build, the following were added at your request:
 - **A fetch/processing timing breakdown** (`timing.fetchTimeMs` / `processingTimeMs` / `totalTimeMs`) in addition to the original single `responseTime` value.
 - **Backend speed tuning:** the HTTP connect timeout was trimmed from 5s to 3s and the page-fetch request timeout from 10s to 6s. A new bounded `ImageAuditor` checks at most 8 distinct image URLs via `HEAD` requests with a 1.2s timeout each, so broken/large-image detection can't meaningfully slow down the overall audit. A single shared `HttpClient` bean replaced the previous per-service client.
 - **Frontend restyle to Tailwind CSS v4**, using a white background, black text, and light-grey cards so text stays high-contrast, plus new result sections (Headings, Images, SEO Tags, Timing Breakdown) to surface the new metrics — no other UI or layout changes.
+- **Single-jar deployment.** The Maven build now bundles the React production build into the Spring Boot jar (see [Production Build](#production-build--single-jar-deployment)), so the whole app deploys as one Railway service with one URL, with no functional or UI changes to either side.
