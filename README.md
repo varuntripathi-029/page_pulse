@@ -144,11 +144,10 @@ This app deploys as a **single Railway service** built from the root-level `Dock
 2. Create a new Railway project from that repo.
 3. In the service settings, set **Root Directory** to empty (repo root), so Railway finds the `Dockerfile` and uses it directly. Leave Build Command and Start Command unset — the `Dockerfile` already defines both (`RUN mvn ...` for the build stage, `CMD ["java", "-jar", ...]` for the start command).
 4. Railway automatically injects a `PORT` environment variable, which `application.properties` already reads via `server.port=${PORT:8080}` — no configuration needed.
-5. Deploy. Railway builds the image (`mvn -f backend/pom.xml clean package` in the `maven:3.9-eclipse-temurin-21` build stage builds the frontend too, per [Production Build](#production-build--single-jar-deployment) above, then the resulting jar is copied into a slim `eclipse-temurin:21-jre` runtime stage) and starts the container — you get one public URL serving both the UI and the API.
+5. Set the `FRONTEND_ORIGIN` environment variable to the service's own public URL (e.g. `https://pagepulse-production-38da.up.railway.app`). Even though the frontend and API are served from the same origin, Spring's CORS processor validates the incoming `Origin` header against `app.cors.allowed-origin` whenever that header is present — and browsers send `Origin` on POST requests even for same-origin calls. Without this set, `app.cors.allowed-origin` falls back to its dev default (`http://localhost:5173`), so the production origin never matches and every `/api/**` request is rejected with a 403 `Invalid CORS request`.
+6. Deploy. Railway builds the image (`mvn -f backend/pom.xml clean package` in the `maven:3.9-eclipse-temurin-21` build stage builds the frontend too, per [Production Build](#production-build--single-jar-deployment) above, then the resulting jar is copied into a slim `eclipse-temurin:21-jre` runtime stage) and starts the container — you get one public URL serving both the UI and the API.
 
 A Dockerfile was chosen over Railway's zero-config Railpack builder specifically because this project is a monorepo where the Maven project (`backend/pom.xml`) needs a sibling directory (`frontend/`) at build time. Railpack's Java auto-detection and its default deploy-image assembly both assume a single-language project rooted at the build root, which doesn't hold here; a Dockerfile sidesteps that by giving explicit, full control over what's copied into the build and runtime stages.
-
-The `FRONTEND_ORIGIN`/`app.cors.allowed-origin` setting isn't needed for this deployment, since the frontend is served same-origin by the same service; it's only relevant for local dev, where it defaults to `http://localhost:5173`.
 
 ## API Contract
 
