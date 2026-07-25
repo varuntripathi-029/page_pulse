@@ -143,11 +143,12 @@ This app deploys as a **single Railway service** — no Docker, no second servic
 1. Push the repository (with both `backend/` and `frontend/` folders) to GitHub.
 2. Create a new Railway project from that repo.
 3. In the service settings, set:
-   - **Root Directory:** `backend`
-   - **Build Command:** `mvn clean package -DskipTests` (Railway's Nixpacks builder auto-detects the Maven project; `-DskipTests` is optional and just keeps deploys fast)
-   - **Start Command:** `java -jar target/page-pulse.jar`
-4. Railway automatically injects a `PORT` environment variable, which `application.properties` already reads via `server.port=${PORT:8080}` — no configuration needed.
-5. Deploy. Railway builds the jar (which builds the frontend as part of `mvn clean package`, per [Production Build](#production-build--single-jar-deployment) above) and starts it — you get one public URL serving both the UI and the API.
+   - **Root Directory:** *(leave empty — repo root)*
+   - **Build Command:** `mvn -f backend/pom.xml clean package -DskipTests`
+   - **Start Command:** `java -jar backend/target/page-pulse.jar`
+4. A `railpack.json` at the repo root pins the build to Railway's Java provider (`{"provider": "java"}`). This is required: Root Directory has to stay at the repo root so `frontend/` is included in the build context (`frontend-maven-plugin` reaches it via `../frontend` from `backend/pom.xml`), but Railpack's Java auto-detection only looks for a `pom.xml` at that root directory. Since `pom.xml` actually lives in `backend/`, Railpack would otherwise fall back to a plain shell environment with no JDK/Maven installed (`mvn: not found`). Forcing the provider explicitly sidesteps that detection gap while still giving the project the frontend directory it needs at build time.
+5. Railway automatically injects a `PORT` environment variable, which `application.properties` already reads via `server.port=${PORT:8080}` — no configuration needed.
+6. Deploy. Railway builds the jar (which builds the frontend as part of `mvn clean package`, per [Production Build](#production-build--single-jar-deployment) above) and starts it — you get one public URL serving both the UI and the API.
 
 The `FRONTEND_ORIGIN`/`app.cors.allowed-origin` setting isn't needed for this deployment, since the frontend is served same-origin by the same service; it's only relevant for local dev, where it defaults to `http://localhost:5173`.
 
